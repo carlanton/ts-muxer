@@ -72,6 +72,7 @@ public class H264Mp4ToAnnexBFilter {
 
             buf.position(buf.position() + length_size);
             unit_type = buf.get(buf.position()) & 0x1f;
+            System.out.println("unit_type = " + unit_type);
 
             if (unit_type == 7)
                 throw new RuntimeException("unit_type = 7");
@@ -80,7 +81,8 @@ public class H264Mp4ToAnnexBFilter {
             }
 
             if (!new_idr && unit_type == 5) {
-                throw new UnsupportedOperationException();
+                if ((buf.get(buf.position()+1) & 0x80) != 0)
+                    new_idr = true;
             }
 
             if (new_idr && unit_type == 5 && !idr_sps_seen && !idr_pps_seen) {
