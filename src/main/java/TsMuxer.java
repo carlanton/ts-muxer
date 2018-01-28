@@ -1,4 +1,4 @@
-import org.mp4parser.IsoFile;
+import org.mp4parser.*;
 import org.mp4parser.boxes.iso14496.part12.MediaDataBox;
 import org.mp4parser.boxes.iso14496.part12.TrackFragmentBaseMediaDecodeTimeBox;
 import org.mp4parser.boxes.iso14496.part12.TrackFragmentBox;
@@ -9,6 +9,7 @@ import javax.xml.bind.DatatypeConverter;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
@@ -267,46 +268,45 @@ public class TsMuxer {
     }
 
 
+    private static H264Mp4ToAnnexBFilter createFilter(Container container) {
+        AvcConfigurationBox avcC = container.getBoxes(AvcConfigurationBox.class, true).get(0);
+        ByteBuffer sps = avcC.getSequenceParameterSets().get(0);
+        ByteBuffer pps = avcC.getPictureParameterSets().get(0);
+        return new H264Mp4ToAnnexBFilter(sps, pps);
+    }
 
-    public static List<AVPacket> mdatPayload() throws IOException {
-        IsoFile isoFile = new IsoFile("v6.mp4");
+    public static List<AVPacket> parseMp4(Path path) throws IOException {
+        BasicContainer container;
+        try (FileChannel channel = FileChannel.open(path)) {
+            BoxParser boxParser = new PropertyBoxParserImpl();
+            container = new BasicContainer();
+            container.initContainer(channel, -1, boxParser);
+        }
 
         List<AVPacket> frames = new ArrayList<>();
-        TrackFragmentBox traf = isoFile.getBoxes(TrackFragmentBox.class, true).get(0);
+        TrackFragmentBox traf = container.getBoxes(TrackFragmentBox.class, true).get(0);
         long sampleDuration = traf.getTrackFragmentHeaderBox().getDefaultSampleDuration();
 
         TrackRunBox trun = traf.getBoxes(TrackRunBox.class, true).get(0);
 
-        MediaDataBox mdat = isoFile.getBoxes(MediaDataBox.class, true).get(0);
-        isoFile.close();
-        ByteBuffer data = mdat.getData();
-        data.position(0);
+        ByteBuffer data = container.getBoxes(MediaDataBox.class, true).get(0).getData();
 
-
-        AvcConfigurationBox avcC = isoFile.getBoxes(AvcConfigurationBox.class, true).get(0);
-        ByteBuffer sps = avcC.getSequenceParameterSets().get(0);
-        ByteBuffer pps = avcC.getPictureParameterSets().get(0);
-        H264Mp4ToAnnexBFilter bsf = new H264Mp4ToAnnexBFilter(sps, pps);
+        H264Mp4ToAnnexBFilter bsf = createFilter(container);
 
         long pts = traf.getBoxes(TrackFragmentBaseMediaDecodeTimeBox.class).get(0).getBaseMediaDecodeTime();
         long dts = pts;
 
         boolean keyFrame = true;
 
+        data.position(0);
         for (TrackRunBox.Entry entry : trun.getEntries()) {
             int size = (int) entry.getSampleSize();
-            /*
-            ByteBuffer frame = data.slice();
-            frame.limit(size);
-            moveToPayloadStart(frame);
-            data.position(data.position() + size);
-            */
+            data.limit(data.position() + size);
 
-            byte[] xs = new byte[size];
-            data.get(xs);
-            ByteBuffer frame = ByteBuffer.wrap(xs);
-            frame = bsf.filter(frame);
+            ByteBuffer frame = bsf.filter(data.asReadOnlyBuffer());
             frames.add(new AVPacket(frame, pts, dts, 0, 256, keyFrame));
+
+            data.position(data.limit());
 
             pts += sampleDuration;
             dts = pts;
@@ -317,7 +317,7 @@ public class TsMuxer {
     }
 
     public static void main(String[] args) throws IOException {
-        List<AVPacket> frames = mdatPayload();
+        List<AVPacket> frames = parseMp4(Paths.get("v6.mp4"));
 
         TsMuxer muxer = new TsMuxer();
         try (FileChannel channel = FileChannel.open(Paths.get("ts"), StandardOpenOption.WRITE,

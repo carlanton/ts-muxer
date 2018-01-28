@@ -60,28 +60,27 @@ public class H264Mp4ToAnnexBFilter {
 
 
     public ByteBuffer filter(ByteBuffer buf) {
-        int unit_type;
-        int nal_size;
-        int i;
-        ByteBuffer out = ByteBuffer.allocate(buf.capacity() + sps.limit() + pps.limit() + 8);
+        int size = buf.limit() - buf.position() + sps.limit() + pps.limit() + 8;
+        ByteBuffer out = ByteBuffer.allocate(size);
 
-        do {
-            for (nal_size = 0, i = 0; i < length_size; i++) {
+        while (buf.remaining() > 0) {
+            int unit_type;
+            int nal_size = 0;
+
+            for (int i = 0; i < length_size; i++) {
                 nal_size = (nal_size << 8) | ( buf.get(buf.position() + i) & 0xFF);
             }
 
             buf.position(buf.position() + length_size);
             unit_type = buf.get(buf.position()) & 0x1f;
-            System.out.println("unit_type = " + unit_type);
 
-            if (unit_type == 7)
+            if (unit_type == 7) {                                // Sequence parameter set
                 throw new RuntimeException("unit_type = 7");
-            else if (unit_type == 8) {
+            } else if (unit_type == 8) {                         // Picture parameter set
                 throw new RuntimeException("unit_type = 8");
             }
 
-            if (!new_idr && unit_type == 5) {
-                if ((buf.get(buf.position()+1) & 0x80) != 0)
+            if (!new_idr && unit_type == 5 && (buf.get(buf.position()+1) & 0x80) != 0) {
                     new_idr = true;
             }
 
@@ -98,8 +97,7 @@ public class H264Mp4ToAnnexBFilter {
                     idr_pps_seen = false;
                 }
             }
-
-        } while (buf.remaining() > 0);
+        }
 
         out.flip();
 
