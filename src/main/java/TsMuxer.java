@@ -15,7 +15,6 @@ import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.channels.WritableByteChannel;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
@@ -36,7 +35,7 @@ public class TsMuxer {
         this.cc = 15;
     }
 
-    public void writePacket(AVPacket pkt, WritableByteChannel channel) throws IOException {
+    public void writePacket(Sample pkt, WritableByteChannel channel) throws IOException {
         //AVStream st = streams.get(pkt.streamIndex());
         int size = pkt.data().limit();
         ByteBuffer buf = pkt.data();
@@ -53,23 +52,29 @@ public class TsMuxer {
         int extradd = 0;
         */
 
-        ByteBuffer data = ByteBuffer.allocate(size + 6);
-        data.put((byte) 0);
-        data.put((byte) 0);
-        data.put((byte) 0);
-        data.put((byte) 1);
-        data.put((byte) 0x09);
-        data.put((byte) ((0xf0) & 0xff));
+        ByteBuffer data;
 
-        data.position(6);
-        data.put(pkt.data());
-        data.flip();
+        if (pkt.getType() == Sample.Type.H264) {
+            data = ByteBuffer.allocate(size + 6);
+            data.put((byte) 0);
+            data.put((byte) 0);
+            data.put((byte) 0);
+            data.put((byte) 1);
+            data.put((byte) 0x09);
+            data.put((byte) 0xf0);
+            data.put(pkt.data());
+            data.flip();
+        } else { // AAC
+            data = pkt.data();
+        }
 
-        writePes(data, 256, pkt.isKeyFrame(), pkt.pts(), pkt.dts(), channel);
+       // System.out.println(data);
+
+        writePes(data, pkt.mpegTsStreamId(), pkt.isKeyFrame(), pkt.pts(), pkt.dts(), pkt.getType(), channel);
     }
 
-    public void writePes(ByteBuffer payload, int pid, boolean key, long pts,
-                                long dts, WritableByteChannel channel) throws IOException {
+    private void writePes(ByteBuffer payload, int pid, boolean key, long pts,
+                          long dts, Sample.Type type, WritableByteChannel channel) throws IOException {
 
         int val;
         boolean isStart = true;
@@ -93,7 +98,7 @@ public class TsMuxer {
             cc = (cc + 1) & 0xF;
             buf.put((byte) ((0x10 | cc) & 0XFF)); // payload indicator + CC
 
-            if (key && isStart) {
+            if (/*key && */ isStart) {
                 // set Random Access for key frames
                 setAfFlag(buf, 0x40);
                 writePcr = true; // if (ts_st->pid == ts_st->service->pcr_pid)
@@ -115,15 +120,18 @@ public class TsMuxer {
                 buf.put((byte) 0);
                 buf.put((byte) 1);
 
-                // todo: aac
+                if (type == Sample.Type.H264) {
+                    buf.put((byte) 0xe0);
+                } else if (type == Sample.Type.AAC_LC) {
+                    buf.put((byte) 0xc0);
+                }
 
-                buf.put((byte) (0xe0 & 0xFF));
                 headerLength = 0;
                 flags = 0;
 
                 //  if (pts != AV_NOPTS_VALUE)
                 headerLength += 5;
-                flags |= 0x80;
+                flags |= 0x80; // only set pts
                 // if (dts != AV_NOPTS_VALUE && pts != AV_NOPTS_VALUE && dts != pts)
                 // todo: dts
 
@@ -133,9 +141,11 @@ public class TsMuxer {
                     len = 0;
                 }
 
-                if (true) { // ts->omit_video_pes_length && st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO
+                if (type == Sample.Type.H264) { // ts->omit_video_pes_length && st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO
                     len = 0;
                 }
+
+                //System.out.println("len = " + len);
 
                 buf.put((byte) ((len >> 8) & 0xFF));
                 buf.put((byte) (len & 0xFF));
@@ -281,10 +291,10 @@ public class TsMuxer {
         return container;
     }
 
-    public static List<AVPacket> parseMp4(Path path) throws IOException {
+    private static List<Sample> parseMp4(Path path) throws IOException {
         Container container = readMp4(path);
 
-        List<AVPacket> frames = new ArrayList<>();
+        List<Sample> frames = new ArrayList<>();
         TrackFragmentBox traf = container.getBoxes(TrackFragmentBox.class, true).get(0);
         long sampleDuration = traf.getTrackFragmentHeaderBox().getDefaultSampleDuration();
 
@@ -304,7 +314,7 @@ public class TsMuxer {
             data.limit(data.position() + size);
 
             ByteBuffer frame = converter.convert(data, keyFrame);
-            frames.add(new AVPacket(frame, pts, dts, 0, 256, keyFrame));
+            frames.add(new Sample(frame, pts, dts, 0, 256, keyFrame, Sample.Type.H264));
 
             data.position(data.limit());
 
@@ -316,11 +326,11 @@ public class TsMuxer {
         return frames;
     }
 
-    public ByteBuffer read(Path sourceSegment, NalUnitToByteStreamConverter converter) throws IOException {
+    ByteBuffer[] read(Path sourceSegment, NalUnitToByteStreamConverter converter) throws IOException {
         Container container = readMp4(sourceSegment);
 
 
-        List<AVPacket> frames = new ArrayList<>();
+        List<Sample> frames = new ArrayList<>();
         TrackFragmentBox traf = container.getBoxes(TrackFragmentBox.class, true).get(0);
         ByteBuffer data = container.getBoxes(MediaDataBox.class, true).get(0).getData();
         TrackRunBox trun = traf.getBoxes(TrackRunBox.class, true).get(0);
@@ -337,7 +347,7 @@ public class TsMuxer {
             data.limit(data.position() + size);
 
             ByteBuffer frame = converter.convert(data, keyFrame);
-            frames.add(new AVPacket(frame, pts, dts, 0, 256, keyFrame));
+            frames.add(new Sample(frame, pts, dts, 0, 256, keyFrame, Sample.Type.H264));
 
             data.position(data.limit());
 
@@ -350,8 +360,8 @@ public class TsMuxer {
         ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
         WritableByteChannel byteChannel = Channels.newChannel(byteArrayOutputStream);
         writePatAndPmt(byteChannel);
-        writePackets(frames, byteChannel);
-        return ByteBuffer.wrap(byteArrayOutputStream.toByteArray());
+        writeSamples(frames, byteChannel);
+        return new ByteBuffer[]{ByteBuffer.wrap(byteArrayOutputStream.toByteArray())};
     }
 
     private void writePatAndPmt(WritableByteChannel channel) throws IOException {
@@ -361,24 +371,32 @@ public class TsMuxer {
 
     }
 
-    public void writePackets(List<AVPacket> frames, WritableByteChannel channel) throws IOException {
-        writePatAndPmt(channel);
-
-        for (AVPacket packet : frames) {
-            writePacket(packet, channel);
+    private void writeSamples(List<Sample> samples, WritableByteChannel channel) throws IOException {
+        for (Sample sample : samples) {
+            writePacket(sample, channel);
         }
     }
 
+    private List<Sample> muxAac(Path segmentPath, WritableByteChannel channel) throws IOException {
+        List<Sample> samples = AAC.read(segmentPath);
+        for (Sample sample : samples) {
+            writePacket(sample, channel);
+        }
+        return samples;
+    }
+
+
     public static void main(String[] args) throws IOException {
-        List<AVPacket> frames = parseMp4(Paths.get("v6-with-init.mp4"));
+        //List<Sample> frames = parseMp4(Paths.get("v6-with-init.mp4"));
 
-        ByteBuffer patAndPmt = ByteBuffer.wrap(Files.readAllBytes(Paths.get("pat-pmt.ts")));
+        //ByteBuffer patAndPmt = ByteBuffer.wrap(Files.readAllBytes(Paths.get("pat-pmt.ts")));
 
-        TsMuxer muxer = new TsMuxer(patAndPmt);
+        TsMuxer muxer = new TsMuxer(ByteBuffer.allocate(0));
         try (FileChannel channel = FileChannel.open(Paths.get("v6.ts"), StandardOpenOption.WRITE,
                 StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
 
-            muxer.writePackets(frames, channel);
+            List<Sample> samples = muxer.muxAac(Paths.get("a-with-init.mp4"), channel);
+            muxer.writeSamples(samples, channel);
         }
     }
 }

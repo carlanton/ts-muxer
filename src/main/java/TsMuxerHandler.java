@@ -67,7 +67,7 @@ public class TsMuxerHandler implements HttpHandler {
 
     private void mux(HttpServerExchange exchange) throws IOException {
         Path sourceSegment = basePath.resolve(exchange.getRequestPath().substring(1).replace(".ts", ".mp4"));
-        ByteBuffer tsSegment = muxer.read(sourceSegment, nalUnitToByteStreamConverter);
+        ByteBuffer[] tsSegment = muxer.read(sourceSegment, nalUnitToByteStreamConverter);
         exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "video/MP2T");
         exchange.getResponseSender().send(tsSegment);
     }

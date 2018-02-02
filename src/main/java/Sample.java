@@ -1,20 +1,22 @@
 import java.nio.ByteBuffer;
 
-public class AVPacket {
+public class Sample {
     ByteBuffer data;
     private final long pts;
     private final long dts;
     private final int streamIndex;
     private final int mpegTsStreamId;
     private final boolean isKeyFrame;
+    private final Type type;
 
-    public AVPacket(ByteBuffer data, long pts, long dts, int streamIndex, int mpegTsStreamId, boolean isKeyFrame) {
+    public Sample(ByteBuffer data, long pts, long dts, int streamIndex, int mpegTsStreamId, boolean isKeyFrame, Type type) {
         this.data = data;
         this.pts = pts;
         this.dts = dts;
         this.streamIndex = streamIndex;
         this.mpegTsStreamId = mpegTsStreamId;
         this.isKeyFrame = isKeyFrame;
+        this.type = type;
     }
 
     public ByteBuffer data() {
@@ -41,7 +43,9 @@ public class AVPacket {
         return isKeyFrame;
     }
 
-
+    public Type getType() {
+        return type;
+    }
 
     @Override
     public String toString() {
@@ -52,5 +56,9 @@ public class AVPacket {
                 ", streamIndex=" + streamIndex +
                 ", mpegTsStreamId=" + mpegTsStreamId +
                 '}';
+    }
+
+    public enum Type {
+        H264, AAC_LC
     }
 }
