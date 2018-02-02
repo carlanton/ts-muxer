@@ -267,12 +267,11 @@ public class TsMuxer {
         System.out.println();
     }
 
-
-    static H264Mp4ToAnnexBFilter createFilter(Container container) {
+    static NalUnitToByteStreamConverter createConverter(Container container) {
         AvcConfigurationBox avcC = container.getBoxes(AvcConfigurationBox.class, true).get(0);
         ByteBuffer sps = avcC.getSequenceParameterSets().get(0);
         ByteBuffer pps = avcC.getPictureParameterSets().get(0);
-        return new H264Mp4ToAnnexBFilter(sps, pps);
+        return new NalUnitToByteStreamConverter(sps, pps);
     }
 
     static Container readMp4(Path path) throws IOException {
@@ -296,8 +295,7 @@ public class TsMuxer {
 
         ByteBuffer data = container.getBoxes(MediaDataBox.class, true).get(0).getData();
 
-        H264Mp4ToAnnexBFilter bsf = createFilter(container);
-
+        NalUnitToByteStreamConverter converter = createConverter(container);
         long pts = traf.getBoxes(TrackFragmentBaseMediaDecodeTimeBox.class).get(0).getBaseMediaDecodeTime();
         long dts = pts;
 
@@ -308,7 +306,7 @@ public class TsMuxer {
             int size = (int) entry.getSampleSize();
             data.limit(data.position() + size);
 
-            ByteBuffer frame = bsf.filter(data.asReadOnlyBuffer());
+            ByteBuffer frame = converter.convert(data, keyFrame);
             frames.add(new AVPacket(frame, pts, dts, 0, 256, keyFrame));
 
             data.position(data.limit());
