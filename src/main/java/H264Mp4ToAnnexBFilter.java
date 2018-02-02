@@ -1,4 +1,15 @@
+import org.mp4parser.Container;
+import org.mp4parser.boxes.iso14496.part12.MediaDataBox;
+import org.mp4parser.boxes.iso14496.part12.TrackFragmentBox;
+import org.mp4parser.boxes.iso14496.part12.TrackRunBox;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.Paths;
+
+import static java.nio.file.StandardOpenOption.*;
 
 /*
  * Based on https://github.com/FFmpeg/FFmpeg/blob/master/libavcodec/h264_mp4toannexb_bsf.c
@@ -34,6 +45,14 @@ public class H264Mp4ToAnnexBFilter {
         new_idr = true;
         idr_sps_seen = false;
         idr_pps_seen = false;
+
+        //hexdump(pps.duplicate());
+    }
+
+    private static void hexdump(ByteBuffer byteBuffer) {
+        while (byteBuffer.remaining() > 0) {
+            System.out.printf("%02x\n", byteBuffer.get());
+        }
     }
 
     private void copy(ByteBuffer out, boolean write_sps_pps, ByteBuffer in, int in_size) {
@@ -74,6 +93,8 @@ public class H264Mp4ToAnnexBFilter {
             buf.position(buf.position() + length_size);
             unit_type = buf.get(buf.position()) & 0x1f;
 
+            System.out.println("unit_type = " + unit_type);
+
             if (unit_type == 7) {                                // Sequence parameter set
                 throw new RuntimeException("unit_type = 7");
             } else if (unit_type == 8) {                         // Picture parameter set
@@ -102,5 +123,45 @@ public class H264Mp4ToAnnexBFilter {
         out.flip();
 
         return out;
+    }
+
+    public static void main(String[] args) throws IOException {
+        Container container = TsMuxer.readMp4(Paths.get("live/v6.mp4"));
+        H264Mp4ToAnnexBFilter bsf = TsMuxer.createFilter(container);
+
+        ByteBuffer data = container.getBoxes(MediaDataBox.class, true).get(0).getData();
+
+        TrackFragmentBox traf = container.getBoxes(TrackFragmentBox.class, true).get(0);
+        TrackRunBox trun = traf.getBoxes(TrackRunBox.class, true).get(0);
+
+
+        NalUnitToByteStreamConverter nalUnitToByteStreamConverter = new NalUnitToByteStreamConverter();
+        nalUnitToByteStreamConverter.initialize(bsf.sps.duplicate(), bsf.pps.duplicate());
+
+        boolean keyFrame = true;
+        try (FileChannel channel = FileChannel.open(Paths.get("live/java.h264"), CREATE, WRITE, TRUNCATE_EXISTING)) {
+            data.position(0);
+            for (TrackRunBox.Entry entry : trun.getEntries()) {
+
+                int size = (int) entry.getSampleSize();
+                data.limit(data.position() + size);
+
+                ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+                nalUnitToByteStreamConverter.convert(data, keyFrame, byteArrayOutputStream);
+
+                ByteBuffer frame = ByteBuffer.wrap(byteArrayOutputStream.toByteArray());
+                while (frame.remaining() > 0)
+                    channel.write(frame);
+
+                /*ByteBuffer frame = bsf.filter(data.asReadOnlyBuffer());
+                while (frame.remaining() > 0)
+                    channel.write(frame);
+                */
+                data.position(data.limit());
+                keyFrame = false;
+            }
+        }
+
+
     }
 }

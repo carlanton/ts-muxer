@@ -268,20 +268,25 @@ public class TsMuxer {
     }
 
 
-    private static H264Mp4ToAnnexBFilter createFilter(Container container) {
+    static H264Mp4ToAnnexBFilter createFilter(Container container) {
         AvcConfigurationBox avcC = container.getBoxes(AvcConfigurationBox.class, true).get(0);
         ByteBuffer sps = avcC.getSequenceParameterSets().get(0);
         ByteBuffer pps = avcC.getPictureParameterSets().get(0);
         return new H264Mp4ToAnnexBFilter(sps, pps);
     }
 
-    public static List<AVPacket> parseMp4(Path path) throws IOException {
+    static Container readMp4(Path path) throws IOException {
         BasicContainer container;
         try (FileChannel channel = FileChannel.open(path)) {
             BoxParser boxParser = new PropertyBoxParserImpl();
             container = new BasicContainer();
             container.initContainer(channel, -1, boxParser);
         }
+        return container;
+    }
+
+    public static List<AVPacket> parseMp4(Path path) throws IOException {
+        Container container = readMp4(path);
 
         List<AVPacket> frames = new ArrayList<>();
         TrackFragmentBox traf = container.getBoxes(TrackFragmentBox.class, true).get(0);
@@ -317,10 +322,10 @@ public class TsMuxer {
     }
 
     public static void main(String[] args) throws IOException {
-        List<AVPacket> frames = parseMp4(Paths.get("v6.mp4"));
+        List<AVPacket> frames = parseMp4(Paths.get("v6-with-init.mp4"));
 
         TsMuxer muxer = new TsMuxer();
-        try (FileChannel channel = FileChannel.open(Paths.get("ts"), StandardOpenOption.WRITE,
+        try (FileChannel channel = FileChannel.open(Paths.get("v6.ts"), StandardOpenOption.WRITE,
                 StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
             for (AVPacket packet : frames) {
                 muxer.writePacket(packet, channel);
