@@ -1,4 +1,7 @@
-import org.mp4parser.*;
+import org.mp4parser.BasicContainer;
+import org.mp4parser.BoxParser;
+import org.mp4parser.Container;
+import org.mp4parser.PropertyBoxParserImpl;
 import org.mp4parser.boxes.iso14496.part12.MediaDataBox;
 import org.mp4parser.boxes.iso14496.part12.TrackFragmentBaseMediaDecodeTimeBox;
 import org.mp4parser.boxes.iso14496.part12.TrackFragmentBox;
@@ -6,9 +9,13 @@ import org.mp4parser.boxes.iso14496.part12.TrackRunBox;
 import org.mp4parser.boxes.iso14496.part15.AvcConfigurationBox;
 
 import javax.xml.bind.DatatypeConverter;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
+import java.nio.channels.WritableByteChannel;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
@@ -16,30 +23,20 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+@SuppressWarnings("Duplicates")
 public class TsMuxer {
     private static final byte SYNC_BYTE = 0x47;
     private static final int TS_PACKET_SIZE = 188;
-    private static final int SECTION_LENGTH = 1020;
+    private final ByteBuffer patAndPmt;
 
     private int cc;
 
-    public TsMuxer() {
+    public TsMuxer(ByteBuffer patAndPmt) {
+        this.patAndPmt = patAndPmt;
         this.cc = 15;
     }
 
-    public void writeSdt() {
-        ByteBuffer data = ByteBuffer.allocate(SECTION_LENGTH);
-        data.putShort((short) 0xff01);
-        data.put((byte) 0xFF);
-        for (int i = 0; i < 1; i++) {
-            data.putShort((short) 0x1234);  // sid
-            data.put((byte) 0xfc); /* currently no EIT info */
-
-        }
-    }
-
-
-    public void writePacket(AVPacket pkt, FileChannel channel) throws IOException {
+    public void writePacket(AVPacket pkt, WritableByteChannel channel) throws IOException {
         //AVStream st = streams.get(pkt.streamIndex());
         int size = pkt.data().limit();
         ByteBuffer buf = pkt.data();
@@ -72,7 +69,7 @@ public class TsMuxer {
     }
 
     public void writePes(ByteBuffer payload, int pid, boolean key, long pts,
-                                long dts, FileChannel channel) throws IOException {
+                                long dts, WritableByteChannel channel) throws IOException {
 
         int val;
         boolean isStart = true;
@@ -254,7 +251,7 @@ public class TsMuxer {
         }
     }
 
-    private static void printPacket(ByteBuffer tsPacket) {
+    static void printPacket(ByteBuffer tsPacket) {
         System.out.println(tsPacket);
         String x = DatatypeConverter.printHexBinary(tsPacket.array());
         List<String> asList = Arrays.asList(x.split("(?<=\\G.{2})"));
@@ -319,15 +316,69 @@ public class TsMuxer {
         return frames;
     }
 
+    public ByteBuffer read(Path sourceSegment, NalUnitToByteStreamConverter converter) throws IOException {
+        Container container = readMp4(sourceSegment);
+
+
+        List<AVPacket> frames = new ArrayList<>();
+        TrackFragmentBox traf = container.getBoxes(TrackFragmentBox.class, true).get(0);
+        ByteBuffer data = container.getBoxes(MediaDataBox.class, true).get(0).getData();
+        TrackRunBox trun = traf.getBoxes(TrackRunBox.class, true).get(0);
+
+        long sampleDuration = traf.getTrackFragmentHeaderBox().getDefaultSampleDuration();
+        long pts = traf.getBoxes(TrackFragmentBaseMediaDecodeTimeBox.class).get(0).getBaseMediaDecodeTime();
+        long dts = pts;
+
+        boolean keyFrame = true;
+
+        data.position(0);
+        for (TrackRunBox.Entry entry : trun.getEntries()) {
+            int size = (int) entry.getSampleSize();
+            data.limit(data.position() + size);
+
+            ByteBuffer frame = converter.convert(data, keyFrame);
+            frames.add(new AVPacket(frame, pts, dts, 0, 256, keyFrame));
+
+            data.position(data.limit());
+
+            pts += sampleDuration;
+            dts = pts;
+            keyFrame = false;
+        }
+
+
+        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+        WritableByteChannel byteChannel = Channels.newChannel(byteArrayOutputStream);
+        writePatAndPmt(byteChannel);
+        writePackets(frames, byteChannel);
+        return ByteBuffer.wrap(byteArrayOutputStream.toByteArray());
+    }
+
+    private void writePatAndPmt(WritableByteChannel channel) throws IOException {
+        ByteBuffer data = patAndPmt.duplicate();
+        while (data.remaining() > 0)
+            channel.write(data);
+
+    }
+
+    public void writePackets(List<AVPacket> frames, WritableByteChannel channel) throws IOException {
+        writePatAndPmt(channel);
+
+        for (AVPacket packet : frames) {
+            writePacket(packet, channel);
+        }
+    }
+
     public static void main(String[] args) throws IOException {
         List<AVPacket> frames = parseMp4(Paths.get("v6-with-init.mp4"));
 
-        TsMuxer muxer = new TsMuxer();
+        ByteBuffer patAndPmt = ByteBuffer.wrap(Files.readAllBytes(Paths.get("pat-pmt.ts")));
+
+        TsMuxer muxer = new TsMuxer(patAndPmt);
         try (FileChannel channel = FileChannel.open(Paths.get("v6.ts"), StandardOpenOption.WRITE,
                 StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
-            for (AVPacket packet : frames) {
-                muxer.writePacket(packet, channel);
-            }
+
+            muxer.writePackets(frames, channel);
         }
     }
 }

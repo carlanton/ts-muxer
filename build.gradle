@@ -10,6 +10,8 @@ repositories {
 }
 
 dependencies {
+    compile 'io.lindstrom:m3u8-parser:0.5'
+    compile 'io.undertow:undertow-core:1.4.22.Final'
     compile 'org.mp4parser:isoparser:1.9.27'
     testCompile group: 'junit', name: 'junit', version: '4.12'
 }
