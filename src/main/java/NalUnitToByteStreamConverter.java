@@ -12,7 +12,6 @@ public class NalUnitToByteStreamConverter {
     private final int naluLengthSize = 4; // hmm
 
     private final byte[] naluStartCode = new byte[]{0x00, 0x00, 0x00, 0x01};
-    private final byte AccessUnitDelimiterRbspAnyPrimaryPicType = (byte) 0xF0;
     private final boolean escapeData = true;
 
 
@@ -32,7 +31,7 @@ public class NalUnitToByteStreamConverter {
         ByteBuffer out = ByteBuffer.allocate(size);
         out.put(naluStartCode);
         out.put(H264_AUD);
-        out.put(AccessUnitDelimiterRbspAnyPrimaryPicType);
+        out.put((byte) 0x10);
 
         if (isKeyFrame) {
             out.put(spsAndPps);

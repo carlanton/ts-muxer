@@ -14,6 +14,7 @@ public class AAC {
     private static final int PROFILE = 2;               // aac lc
     private static final int SAMPLE_FREQ_INDEX = 3;     // 48kHz
     private static final int CHANNEL_CONFIGURATION = 2; // stereo
+    private static final int ADTS_SIZE = 7;
 
     public static List<Sample> read(Path path) throws IOException {
         Container container = TsMuxer.readMp4(path);
@@ -27,16 +28,27 @@ public class AAC {
         long pts = traf.getBoxes(TrackFragmentBaseMediaDecodeTimeBox.class).get(0).getBaseMediaDecodeTime();
         long dts = pts;
 
-
         data.rewind();
+
+        ByteBuffer sample = ByteBuffer.allocate(2912);
+        long samplePts = pts;
+        long sampleDts = dts;
+
         for (TrackRunBox.Entry entry : trun.getEntries()) {
             int size = (int) entry.getSampleSize();
             data.limit(data.position() + size);
 
-            ByteBuffer sample = addAdts(data);
+            if (sample.remaining() < size + ADTS_SIZE) {
+                sample.flip();
+                samples.add(new Sample(sample, samplePts, sampleDts, 0, 257, true, Sample.Type.AAC_LC));
+                sample = ByteBuffer.allocate(2912);
+                samplePts = pts;
+                sampleDts = dts;
+            }
 
-
-            samples.add(new Sample(sample, pts, dts, 0, 257, true, Sample.Type.AAC_LC));
+            addAdts(size, sample);
+            data.get(sample.array(), sample.position(), size);
+            sample.position(sample.position() + size);
 
             data.position(data.limit());
 
@@ -44,47 +56,23 @@ public class AAC {
             dts = pts;
         }
 
-        List<Sample> xs = new ArrayList<>();
-        Sample prev = null;
-        for (Sample sample : samples) {
-            if (prev == null) {
-                prev = sample;
-            } else if (prev.data.limit() + sample.data.limit() < 2912) {
-                ByteBuffer combined = ByteBuffer.allocate(prev.data.limit() + sample.data.limit());
-                combined.put(prev.data);
-                combined.put(sample.data);
-                combined.rewind();
-                prev = new Sample(combined, prev.pts(), prev.dts(), prev.streamIndex(), prev.mpegTsStreamId(),
-                        prev.isKeyFrame(), Sample.Type.AAC_LC);
-            } else {
-                xs.add(prev);
-                prev = sample;
-            }
+        if (sample.position() > 0) {
+            sample.flip();
+            samples.add(new Sample(sample, samplePts, sampleDts, 0, 257, true, Sample.Type.AAC_LC));
         }
-        if (prev != null)
-            xs.add(prev);
 
-        xs.forEach(System.out::println);
-
-        return xs;
+        return samples;
     }
 
-    private static ByteBuffer addAdts(ByteBuffer data) {
-        int size = data.limit() - data.position();
+    private static void addAdts(int size, ByteBuffer data) {
         int frameLength = 7 + size;
-
-        ByteBuffer header = ByteBuffer.allocate(7 + size);
-        header.put((byte) 0xFF);
-        header.put((byte) 0xF1);
+        data.put((byte) 0xFF);
+        data.put((byte) 0xF1);
         //header.put((byte) (((PROFILE - 1) << 6) | (0x3c & (SAMPLE_FREQ_INDEX << 2)) | (0xff & CHANNEL_CONFIGURATION) >>> 2));
-        header.put((byte) (((PROFILE - 1) << 6) | (0x3c & (SAMPLE_FREQ_INDEX << 2))));
-        header.put((byte) ((CHANNEL_CONFIGURATION << 6) | (0x1FFF & frameLength >>> 11)));
-        header.put((byte) ((0xFF & (frameLength >> 3))));
-        header.put((byte) (((0x07 & frameLength) << 5) | 0x1F));
-        header.put((byte) 0xFC);
-
-        data.get(header.array(), header.position(), size);
-        header.rewind();
-        return header;
+        data.put((byte) (((PROFILE - 1) << 6) | (0x3c & (SAMPLE_FREQ_INDEX << 2))));
+        data.put((byte) ((CHANNEL_CONFIGURATION << 6) | (0x1FFF & frameLength >>> 11)));
+        data.put((byte) ((0xFF & (frameLength >> 3))));
+        data.put((byte) (((0x07 & frameLength) << 5) | 0x1F));
+        data.put((byte) 0xFC);
     }
 }

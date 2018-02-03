@@ -9,18 +9,18 @@ import org.mp4parser.boxes.iso14496.part12.TrackRunBox;
 import org.mp4parser.boxes.iso14496.part15.AvcConfigurationBox;
 
 import javax.xml.bind.DatatypeConverter;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.channels.WritableByteChannel;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.ListIterator;
 
 @SuppressWarnings("Duplicates")
 public class TsMuxer {
@@ -52,21 +52,8 @@ public class TsMuxer {
         int extradd = 0;
         */
 
-        ByteBuffer data;
+        ByteBuffer data = pkt.data();
 
-        if (pkt.getType() == Sample.Type.H264) {
-            data = ByteBuffer.allocate(size + 6);
-            data.put((byte) 0);
-            data.put((byte) 0);
-            data.put((byte) 0);
-            data.put((byte) 1);
-            data.put((byte) 0x09);
-            data.put((byte) 0xf0);
-            data.put(pkt.data());
-            data.flip();
-        } else { // AAC
-            data = pkt.data();
-        }
 
        // System.out.println(data);
 
@@ -98,10 +85,12 @@ public class TsMuxer {
             cc = (cc + 1) & 0xF;
             buf.put((byte) ((0x10 | cc) & 0XFF)); // payload indicator + CC
 
-            if (/*key && */ isStart) {
+            if (key && isStart) {
                 // set Random Access for key frames
                 setAfFlag(buf, 0x40);
-                writePcr = true; // if (ts_st->pid == ts_st->service->pcr_pid)
+
+                //if (type == Sample.Type.H264)
+                writePcr = true;
                 moveToPayloadStart(buf);
             }
 
@@ -274,7 +263,7 @@ public class TsMuxer {
         System.out.println();
     }
 
-    static NalUnitToByteStreamConverter createConverter(Container container) {
+    static NalUnitToByteStreamConverter createConverter(Container container) throws IOException {
         AvcConfigurationBox avcC = container.getBoxes(AvcConfigurationBox.class, true).get(0);
         ByteBuffer sps = avcC.getSequenceParameterSets().get(0);
         ByteBuffer pps = avcC.getPictureParameterSets().get(0);
@@ -327,6 +316,7 @@ public class TsMuxer {
     }
 
     ByteBuffer[] read(Path sourceSegment, NalUnitToByteStreamConverter converter) throws IOException {
+        /*
         Container container = readMp4(sourceSegment);
 
 
@@ -362,6 +352,8 @@ public class TsMuxer {
         writePatAndPmt(byteChannel);
         writeSamples(frames, byteChannel);
         return new ByteBuffer[]{ByteBuffer.wrap(byteArrayOutputStream.toByteArray())};
+        */
+        return null;
     }
 
     private void writePatAndPmt(WritableByteChannel channel) throws IOException {
@@ -385,18 +377,85 @@ public class TsMuxer {
         return samples;
     }
 
+    public List<Sample> interleave(List<Sample> audioSamples, List<Sample> videoSamples) {
+        List<Sample> xs = new ArrayList<>();
+
+        ListIterator<Sample> audio = audioSamples.listIterator();
+        ListIterator<Sample> video = videoSamples.listIterator();
+
+        while (video.hasNext() || audio.hasNext()) {
+            for (int i = 0; i < 5; i++) {
+                if (!video.hasNext())
+                    break;
+                xs.add(video.next());
+            }
+
+            for (int i = 0; i < 1; i++) {
+                if (!audio.hasNext())
+                    break;
+                xs.add(audio.next());
+            }
+        }
+
+        long videoFirstPts = 0;
+        long videoLastPts = 0;
+        int vs = 0;
+        long audioFirstPts = 0;
+        long audioLastPts = 0;
+        int as = 0;
+        boolean isVideo = true;
+        for (Sample sample : xs) {
+            if (isVideo && sample.getType() == Sample.Type.H264) {
+                vs ++;
+                videoLastPts = sample.pts();
+            } else if (isVideo && sample.getType() == Sample.Type.AAC_LC) {
+                System.out.println("video " + vs + ", " + (videoLastPts - videoFirstPts));
+                vs = 0;
+                isVideo = false;
+                audioFirstPts = sample.pts();
+                audioLastPts = sample.pts();
+            } else if (!isVideo && sample.getType() == Sample.Type.AAC_LC) {
+                as ++;
+                audioLastPts = sample.pts();
+            } else if (!isVideo && sample.getType() == Sample.Type.H264) {
+                System.out.println("audio " + as + ", " + (audioLastPts - audioFirstPts));
+                as = 0;
+                isVideo = true;
+                videoFirstPts = sample.pts();
+                videoLastPts = sample.pts();
+            }
+        }
+        if (isVideo) {
+            System.out.println("video " + vs + ", " + (videoLastPts - videoFirstPts));
+        } else {
+            System.out.println("audio " + as + ", " + (audioLastPts - audioFirstPts));
+        }
+
+        return videoSamples;
+    }
+
 
     public static void main(String[] args) throws IOException {
         //List<Sample> frames = parseMp4(Paths.get("v6-with-init.mp4"));
 
-        //ByteBuffer patAndPmt = ByteBuffer.wrap(Files.readAllBytes(Paths.get("pat-pmt.ts")));
+        ByteBuffer patAndPmt = ByteBuffer.wrap(Files.readAllBytes(Paths.get("ffmpeg.ts")));
+        patAndPmt.limit(188*3);
 
         TsMuxer muxer = new TsMuxer(ByteBuffer.allocate(0));
-        try (FileChannel channel = FileChannel.open(Paths.get("v6.ts"), StandardOpenOption.WRITE,
+        try (FileChannel channel = FileChannel.open(Paths.get("java.ts"), StandardOpenOption.WRITE,
                 StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
 
-            List<Sample> samples = muxer.muxAac(Paths.get("a-with-init.mp4"), channel);
-            muxer.writeSamples(samples, channel);
+            List<Sample> aacSamples = AAC.read(Paths.get("media/a0.mp4"));
+            List<Sample> avcSamples = TsMuxer.parseMp4(Paths.get("media/v6.mp4"));
+            List<Sample> samples = muxer.interleave(aacSamples, avcSamples);
+            System.out.println(aacSamples.size());
+            System.out.println(avcSamples.size());
+            System.out.println(samples.size());
+
+            while (patAndPmt.remaining() > 0)
+                channel.write(patAndPmt);
+
+            muxer.writeSamples(avcSamples, channel);
         }
     }
 }
