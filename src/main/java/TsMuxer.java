@@ -22,7 +22,7 @@ public class TsMuxer {
     private static final Comparator<Sample> SAMPLE_COMPARATOR = Comparator.comparingLong(Sample::dts)
             .thenComparingInt(Sample::pid);
 
-    private void writeSample(Sample sample, ContinuityCounter cc, WritableByteChannel channel) throws IOException {
+    private static void writeSample(Sample sample, ContinuityCounter cc, WritableByteChannel channel) throws IOException {
         int val;
         boolean isStart = true;
         int headerLength, flags;
@@ -51,12 +51,8 @@ public class TsMuxer {
             buf.put((byte) (val & 0xFF));
             buf.put((byte) (pid & 0xFF));
 
-            if (type == Sample.Type.H264) {
-                buf.put((byte) ((0x10 | cc.incrementAndGetVideo()) & 0xFF)); // payload indicator + CC
-            } else {
-                buf.put((byte) ((0x10 | cc.incrementAndGetAudio()) & 0xFF)); // payload indicator + CC
+            cc.write(type, buf);
 
-            }
             if (key && isStart) {
                 // set Random Access for key frames
                 setAfFlag(buf, 0x40);
@@ -105,8 +101,6 @@ public class TsMuxer {
                 if (type == Sample.Type.H264) {
                     len = 0;
                 }
-
-                //System.out.println("len = " + len);
 
                 buf.put((byte) ((len >> 8) & 0xFF));
                 buf.put((byte) (len & 0xFF));
@@ -227,7 +221,7 @@ public class TsMuxer {
         return new NalUnitToByteStreamConverter(sps, pps);
     }
 
-    ByteBuffer[] read(Path videoSegment, Path audioSegment, NalUnitToByteStreamConverter converter) throws IOException {
+    static ByteBuffer[] read(Path videoSegment, Path audioSegment, NalUnitToByteStreamConverter converter) throws IOException {
         List<Sample> avcSamples = MP4Utils.readVideo(videoSegment, converter);
         List<Sample> aacSamples = MP4Utils.readAudio(audioSegment);
         List<Sample> samples = TsMuxer.interleave(aacSamples, avcSamples);
@@ -241,7 +235,7 @@ public class TsMuxer {
         };
     }
 
-    private void writeSamples(List<Sample> samples, WritableByteChannel channel) throws IOException {
+    private static void writeSamples(List<Sample> samples, WritableByteChannel channel) throws IOException {
         ContinuityCounter cc = new ContinuityCounter();
         for (Sample sample : samples) {
             writeSample(sample, cc, channel);
@@ -260,9 +254,7 @@ public class TsMuxer {
         Path basePath = Paths.get("media/bbb/");
         Container init = MP4Utils.readMp4(basePath.resolve("v-init.mp4"));
         NalUnitToByteStreamConverter converter = TsMuxer.createConverter(init);
-
-        TsMuxer muxer = new TsMuxer();
-
+        
         ByteBuffer pat = Constants.PAT.duplicate();
         ByteBuffer pmt = Constants.PMT.duplicate();
 
@@ -279,7 +271,7 @@ public class TsMuxer {
             while (pmt.remaining() > 0)
                 channel.write(pmt);
 
-            muxer.writeSamples(samples, channel);
+            writeSamples(samples, channel);
         }
     }
 }
