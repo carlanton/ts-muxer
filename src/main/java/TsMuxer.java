@@ -7,7 +7,6 @@ import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.channels.WritableByteChannel;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
@@ -23,39 +22,28 @@ public class TsMuxer {
     private static final Comparator<Sample> SAMPLE_COMPARATOR = Comparator.comparingLong(Sample::dts)
             .thenComparingInt(Sample::pid);
 
-    private final ByteBuffer patAndPmt;
-
-    private int videoCC;
-    private int audioCC;
-
-    public TsMuxer(ByteBuffer patAndPmt) {
-        this.patAndPmt = patAndPmt;
-        this.videoCC = 15;
-        this.audioCC = 15;
-    }
-
-    public int writePacket(Sample pkt, WritableByteChannel channel) throws IOException {
-        return writePes(pkt.data(), pkt.pid(), pkt.isKeyFrame(), pkt.pts(), pkt.dts(), pkt.getType(), channel);
-    }
-
-    private int writePes(ByteBuffer payload, int pid, boolean key, long pts,
-                          long dts, Sample.Type type, WritableByteChannel channel) throws IOException {
-
+    private void writeSample(Sample sample, ContinuityCounter cc, WritableByteChannel channel) throws IOException {
         int val;
         boolean isStart = true;
         int headerLength, flags;
+        ByteBuffer payload = sample.data();
+        int pid = sample.pid();
+        Sample.Type type = sample.getType();
+        boolean key = sample.isKeyFrame();
+        long pts = sample.pts();
+        long dts = sample.dts();
         int payloadSize = payload.limit();
         int len;
         int stuffingLength;
 
-        int pkts = 0;
+        ByteBuffer buf = ByteBuffer.allocate(TS_PACKET_SIZE);
 
         while (payload.remaining() > 0) {
-            ByteBuffer buf = ByteBuffer.allocate(188);
+            buf.rewind();
+            buf.put(SYNC_BYTE);
 
             boolean writePcr = false;
 
-            buf.put(SYNC_BYTE);
             val = pid >> 8;
             if (isStart)
                 val |= 0x40;
@@ -64,11 +52,9 @@ public class TsMuxer {
             buf.put((byte) (pid & 0xFF));
 
             if (type == Sample.Type.H264) {
-                videoCC = (videoCC + 1) & 0xF;
-                buf.put((byte) ((0x10 | videoCC) & 0XFF)); // payload indicator + CC
+                buf.put((byte) ((0x10 | cc.incrementAndGetVideo()) & 0xFF)); // payload indicator + CC
             } else {
-                audioCC = (audioCC + 1) & 0xF;
-                buf.put((byte) ((0x10 | audioCC) & 0XFF)); // payload indicator + CC
+                buf.put((byte) ((0x10 | cc.incrementAndGetAudio()) & 0xFF)); // payload indicator + CC
 
             }
             if (key && isStart) {
@@ -171,20 +157,14 @@ public class TsMuxer {
             }
 
             payload.get(buf.array(), TS_PACKET_SIZE - len, len);
-            buf.limit(buf.capacity()).rewind();
+            buf.rewind();
 
             while (buf.remaining() > 0) {
                 channel.write(buf);
             }
 
-            buf.rewind();
-
             payloadSize -= len;
-
-            pkts++;
         }
-
-        return pkts;
     }
 
 
@@ -247,24 +227,24 @@ public class TsMuxer {
         return new NalUnitToByteStreamConverter(sps, pps);
     }
 
-    // lol
-    synchronized ByteBuffer[] read(Path videoSegment, Path audioSegment, NalUnitToByteStreamConverter converter) throws IOException {
+    ByteBuffer[] read(Path videoSegment, Path audioSegment, NalUnitToByteStreamConverter converter) throws IOException {
         List<Sample> avcSamples = MP4Utils.readVideo(videoSegment, converter);
         List<Sample> aacSamples = MP4Utils.readAudio(audioSegment);
         List<Sample> samples = TsMuxer.interleave(aacSamples, avcSamples);
 
-        videoCC = 15;
-        audioCC = 15;
-
         ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
         writeSamples(samples, Channels.newChannel(byteArrayOutputStream));
-        return new ByteBuffer[]{ patAndPmt.duplicate(), ByteBuffer.wrap(byteArrayOutputStream.toByteArray()) };
+        return new ByteBuffer[]{
+                Constants.PAT.duplicate(),
+                Constants.PMT.duplicate(),
+                ByteBuffer.wrap(byteArrayOutputStream.toByteArray())
+        };
     }
 
     private void writeSamples(List<Sample> samples, WritableByteChannel channel) throws IOException {
-        int pkts = 0;
+        ContinuityCounter cc = new ContinuityCounter();
         for (Sample sample : samples) {
-            pkts += writePacket(sample, channel);
+            writeSample(sample, cc, channel);
         }
     }
 
@@ -277,16 +257,14 @@ public class TsMuxer {
     }
 
     public static void main(String[] args) throws IOException {
-        //List<Sample> frames = parseMp4(Paths.get("v6-with-init.mp4"));
-
-        ByteBuffer patAndPmt = ByteBuffer.wrap(Files.readAllBytes(Paths.get("media/v6.ts")));
-        patAndPmt.limit(188*2);
-
         Path basePath = Paths.get("media/bbb/");
         Container init = MP4Utils.readMp4(basePath.resolve("v-init.mp4"));
         NalUnitToByteStreamConverter converter = TsMuxer.createConverter(init);
 
-        TsMuxer muxer = new TsMuxer(patAndPmt);
+        TsMuxer muxer = new TsMuxer();
+
+        ByteBuffer pat = Constants.PAT.duplicate();
+        ByteBuffer pmt = Constants.PMT.duplicate();
 
         try (FileChannel channel = FileChannel.open(Paths.get("java.ts"), StandardOpenOption.WRITE,
                 StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
@@ -295,8 +273,11 @@ public class TsMuxer {
             List<Sample> avcSamples = MP4Utils.readVideo(basePath.resolve("v-1.mp4"), converter);
             List<Sample> samples = TsMuxer.interleave(aacSamples, avcSamples);
 
-            while (patAndPmt.remaining() > 0)
-                channel.write(patAndPmt);
+            while (pat.remaining() > 0)
+                channel.write(pat);
+
+            while (pmt.remaining() > 0)
+                channel.write(pmt);
 
             muxer.writeSamples(samples, channel);
         }

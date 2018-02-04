@@ -27,7 +27,6 @@ public class MP4Utils {
 
     public static List<Sample> readVideo(Path path, NalUnitToByteStreamConverter converter) throws IOException {
         Container container = readMp4(path);
-        System.out.println(path);
 
         TrackFragmentBox traf = container.getBoxes(TrackFragmentBox.class, true).get(0);
         ByteBuffer data = container.getBoxes(MediaDataBox.class, true).get(0).getData();

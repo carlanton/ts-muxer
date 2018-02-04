@@ -30,7 +30,7 @@ public class TsMuxerHandler implements HttpHandler {
         ByteBuffer patAndPmt = ByteBuffer.wrap(Files.readAllBytes(Paths.get("media/v6.ts")));
         patAndPmt.limit(188*2);
 
-        muxer = new TsMuxer(patAndPmt);
+        muxer = new TsMuxer();
     }
 
     @Override
