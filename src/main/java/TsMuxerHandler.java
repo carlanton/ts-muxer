@@ -23,10 +23,13 @@ public class TsMuxerHandler implements HttpHandler {
 
 
     public TsMuxerHandler() throws IOException {
-        basePath = Paths.get("SVT1-1382684-024A/a59fa671-ffb3-4265-af4d-d46d025b605b/dash-v6/");
-        Container init = TsMuxer.readMp4(basePath.resolve("v6-init.mp4"));
+        basePath = Paths.get("media/");
+        Container init = TsMuxer.readMp4(basePath.resolve("v6.mp4"));
         nalUnitToByteStreamConverter = TsMuxer.createConverter(init);
-        ByteBuffer patAndPmt = ByteBuffer.wrap(Files.readAllBytes(Paths.get("pat-pmt.ts")));
+
+        ByteBuffer patAndPmt = ByteBuffer.wrap(Files.readAllBytes(Paths.get("media/v6.ts")));
+        patAndPmt.limit(188*2);
+
         muxer = new TsMuxer(patAndPmt);
     }
 
@@ -45,7 +48,7 @@ public class TsMuxerHandler implements HttpHandler {
     }
 
     private void sendManifest(HttpServerExchange exchange) {
-        List<MediaSegment> segments = IntStream.range(1, 137)
+        List<MediaSegment> segments = IntStream.range(1, 5)
                 .mapToObj(j -> MediaSegment.builder()
                         .duration(3.2)
                         .uri("v6-" + j + ".ts")
@@ -66,7 +69,7 @@ public class TsMuxerHandler implements HttpHandler {
     }
 
     private void mux(HttpServerExchange exchange) throws IOException {
-        Path sourceSegment = basePath.resolve(exchange.getRequestPath().substring(1).replace(".ts", ".mp4"));
+        Path sourceSegment = basePath.resolve("v6.mp4");
         ByteBuffer[] tsSegment = muxer.read(sourceSegment, nalUnitToByteStreamConverter);
         exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "video/MP2T");
         exchange.getResponseSender().send(tsSegment);

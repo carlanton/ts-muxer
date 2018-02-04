@@ -8,16 +8,19 @@ import org.mp4parser.boxes.iso14496.part12.TrackFragmentBox;
 import org.mp4parser.boxes.iso14496.part12.TrackRunBox;
 import org.mp4parser.boxes.iso14496.part15.AvcConfigurationBox;
 
-import javax.xml.bind.DatatypeConverter;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 
 @SuppressWarnings("Duplicates")
 public class TsMuxer {
@@ -245,19 +248,6 @@ public class TsMuxer {
         }
     }
 
-    static void printPacket(ByteBuffer tsPacket) {
-        System.out.println(tsPacket);
-        String x = DatatypeConverter.printHexBinary(tsPacket.array());
-        List<String> asList = Arrays.asList(x.split("(?<=\\G.{2})"));
-        for (int i = 0; i < asList.size(); i++) {
-            String b = asList.get(i);
-            System.out.print(b + " ");
-            if (i % 4 == 3)
-                System.out.println();
-        }
-        System.out.println();
-    }
-
     static NalUnitToByteStreamConverter createConverter(Container container) throws IOException {
         AvcConfigurationBox avcC = container.getBoxes(AvcConfigurationBox.class, true).get(0);
         ByteBuffer sps = avcC.getSequenceParameterSets().get(0);
@@ -311,51 +301,12 @@ public class TsMuxer {
     }
 
     ByteBuffer[] read(Path sourceSegment, NalUnitToByteStreamConverter converter) throws IOException {
-        /*
-        Container container = readMp4(sourceSegment);
-
-
-        List<Sample> frames = new ArrayList<>();
-        TrackFragmentBox traf = container.getBoxes(TrackFragmentBox.class, true).get(0);
-        ByteBuffer data = container.getBoxes(MediaDataBox.class, true).get(0).getData();
-        TrackRunBox trun = traf.getBoxes(TrackRunBox.class, true).get(0);
-
-        long sampleDuration = traf.getTrackFragmentHeaderBox().getDefaultSampleDuration();
-        long pts = traf.getBoxes(TrackFragmentBaseMediaDecodeTimeBox.class).get(0).getBaseMediaDecodeTime();
-        long dts = pts;
-
-        boolean keyFrame = true;
-
-        data.position(0);
-        for (TrackRunBox.Entry entry : trun.getEntries()) {
-            int size = (int) entry.getSampleSize();
-            data.limit(data.position() + size);
-
-            ByteBuffer frame = converter.convert(data, keyFrame);
-            frames.add(new Sample(frame, pts, dts, 0, 256, keyFrame, Sample.Type.H264));
-
-            data.position(data.limit());
-
-            pts += sampleDuration;
-            dts = pts;
-            keyFrame = false;
-        }
+        List<Sample> avcSamples = TsMuxer.parseMp4(sourceSegment);
 
 
         ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-        WritableByteChannel byteChannel = Channels.newChannel(byteArrayOutputStream);
-        writePatAndPmt(byteChannel);
-        writeSamples(frames, byteChannel);
-        return new ByteBuffer[]{ByteBuffer.wrap(byteArrayOutputStream.toByteArray())};
-        */
-        return null;
-    }
-
-    private void writePatAndPmt(WritableByteChannel channel) throws IOException {
-        ByteBuffer data = patAndPmt.duplicate();
-        while (data.remaining() > 0)
-            channel.write(data);
-
+        writeSamples(avcSamples, Channels.newChannel(byteArrayOutputStream));
+        return new ByteBuffer[]{ patAndPmt.duplicate(), ByteBuffer.wrap(byteArrayOutputStream.toByteArray()) };
     }
 
     private void writeSamples(List<Sample> samples, WritableByteChannel channel) throws IOException {
