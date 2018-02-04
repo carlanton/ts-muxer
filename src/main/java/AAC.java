@@ -15,6 +15,11 @@ public class AAC {
     private static final int SAMPLE_FREQ_INDEX = 3;     // 48kHz
     private static final int CHANNEL_CONFIGURATION = 2; // stereo
     private static final int ADTS_SIZE = 7;
+    private static final int AUDIO_PID = 257;
+
+//    private static final int SAMPLE_MAX_SIZE = 3361;
+    private static final int SAMPLE_MAX_SIZE = 8000;
+
 
     public static List<Sample> read(Path path) throws IOException {
         Container container = TsMuxer.readMp4(path);
@@ -30,7 +35,7 @@ public class AAC {
 
         data.rewind();
 
-        ByteBuffer sample = ByteBuffer.allocate(2912);
+        ByteBuffer sample = ByteBuffer.allocate(SAMPLE_MAX_SIZE);
         long samplePts = pts;
         long sampleDts = dts;
 
@@ -40,8 +45,8 @@ public class AAC {
 
             if (sample.remaining() < size + ADTS_SIZE) {
                 sample.flip();
-                samples.add(new Sample(sample, samplePts, sampleDts, 0, 257, true, Sample.Type.AAC_LC));
-                sample = ByteBuffer.allocate(2912);
+                samples.add(new Sample(sample, samplePts, sampleDts, 0, AUDIO_PID, true, Sample.Type.AAC_LC));
+                sample = ByteBuffer.allocate(SAMPLE_MAX_SIZE);
                 samplePts = pts;
                 sampleDts = dts;
             }
@@ -58,7 +63,7 @@ public class AAC {
 
         if (sample.position() > 0) {
             sample.flip();
-            samples.add(new Sample(sample, samplePts, sampleDts, 0, 257, true, Sample.Type.AAC_LC));
+            samples.add(new Sample(sample, samplePts, sampleDts, 0, AUDIO_PID, true, Sample.Type.AAC_LC));
         }
 
         return samples;

@@ -17,50 +17,32 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.ListIterator;
+import java.util.*;
 
 @SuppressWarnings("Duplicates")
 public class TsMuxer {
     private static final byte SYNC_BYTE = 0x47;
     private static final int TS_PACKET_SIZE = 188;
+
+    private static final Comparator<Sample> SAMPLE_COMPARATOR = Comparator.comparingLong(Sample::dts)
+            .thenComparingInt(Sample::mpegTsStreamId);
+
     private final ByteBuffer patAndPmt;
 
-    private int cc;
+    private int videoCC;
+    private int audioCC;
 
     public TsMuxer(ByteBuffer patAndPmt) {
         this.patAndPmt = patAndPmt;
-        this.cc = 15;
+        this.videoCC = 15;
+        this.audioCC = 15;
     }
 
-    public void writePacket(Sample pkt, WritableByteChannel channel) throws IOException {
-        //AVStream st = streams.get(pkt.streamIndex());
-        int size = pkt.data().limit();
-        ByteBuffer buf = pkt.data();
-        final long delay = 0; // av_rescale(s->max_delay, 90000, AV_TIME_BASE) * 2;
-        long dts = pkt.dts();
-        long pts = pkt.pts();
-
-        int streamId = pkt.mpegTsStreamId();
-
-        /*
-        // if (st->codecpar->codec_id == AV_CODEC_ID_H264)
-        long state = -1;
-        // int extradd = (pkt->flags & AV_PKT_FLAG_KEY) ? st->codecpar->extradata_size : 0;
-        int extradd = 0;
-        */
-
-        ByteBuffer data = pkt.data();
-
-
-       // System.out.println(data);
-
-        writePes(data, pkt.mpegTsStreamId(), pkt.isKeyFrame(), pkt.pts(), pkt.dts(), pkt.getType(), channel);
+    public int writePacket(Sample pkt, WritableByteChannel channel) throws IOException {
+        return writePes(pkt.data(), pkt.mpegTsStreamId(), pkt.isKeyFrame(), pkt.pts(), pkt.dts(), pkt.getType(), channel);
     }
 
-    private void writePes(ByteBuffer payload, int pid, boolean key, long pts,
+    private int writePes(ByteBuffer payload, int pid, boolean key, long pts,
                           long dts, Sample.Type type, WritableByteChannel channel) throws IOException {
 
         int val;
@@ -70,6 +52,9 @@ public class TsMuxer {
         int len;
         int stuffingLength;
 
+        int pkts = 0;
+
+        System.out.println(payload);
         while (payload.remaining() > 0) {
             ByteBuffer buf = ByteBuffer.allocate(188);
 
@@ -82,15 +67,21 @@ public class TsMuxer {
 
             buf.put((byte) (val & 0xFF));
             buf.put((byte) (pid & 0xFF));
-            cc = (cc + 1) & 0xF;
-            buf.put((byte) ((0x10 | cc) & 0XFF)); // payload indicator + CC
 
+            if (type == Sample.Type.H264) {
+                videoCC = (videoCC + 1) & 0xF;
+                buf.put((byte) ((0x10 | videoCC) & 0XFF)); // payload indicator + CC
+            } else {
+                audioCC = (audioCC + 1) & 0xF;
+                buf.put((byte) ((0x10 | audioCC) & 0XFF)); // payload indicator + CC
+
+            }
             if (key && isStart) {
                 // set Random Access for key frames
                 setAfFlag(buf, 0x40);
 
-                //if (type == Sample.Type.H264)
-                writePcr = true;
+                if (type == Sample.Type.H264)
+                    writePcr = true;
                 moveToPayloadStart(buf);
             }
 
@@ -194,7 +185,11 @@ public class TsMuxer {
             buf.rewind();
 
             payloadSize -= len;
+
+            pkts++;
         }
+
+        return pkts;
     }
 
 
@@ -364,82 +359,26 @@ public class TsMuxer {
     }
 
     private void writeSamples(List<Sample> samples, WritableByteChannel channel) throws IOException {
+        int pkts = 0;
         for (Sample sample : samples) {
-            writePacket(sample, channel);
+            pkts += writePacket(sample, channel);
         }
+        System.out.println("pkts = " + pkts);
     }
 
-    private List<Sample> muxAac(Path segmentPath, WritableByteChannel channel) throws IOException {
-        List<Sample> samples = AAC.read(segmentPath);
-        for (Sample sample : samples) {
-            writePacket(sample, channel);
-        }
+    private static List<Sample> interleave(List<Sample> audioSamples, List<Sample> videoSamples) {
+        List<Sample> samples = new ArrayList<>(audioSamples.size() + videoSamples.size());
+        samples.addAll(audioSamples);
+        samples.addAll(videoSamples);
+        samples.sort(SAMPLE_COMPARATOR);
         return samples;
     }
-
-    public List<Sample> interleave(List<Sample> audioSamples, List<Sample> videoSamples) {
-        List<Sample> xs = new ArrayList<>();
-
-        ListIterator<Sample> audio = audioSamples.listIterator();
-        ListIterator<Sample> video = videoSamples.listIterator();
-
-        while (video.hasNext() || audio.hasNext()) {
-            for (int i = 0; i < 5; i++) {
-                if (!video.hasNext())
-                    break;
-                xs.add(video.next());
-            }
-
-            for (int i = 0; i < 1; i++) {
-                if (!audio.hasNext())
-                    break;
-                xs.add(audio.next());
-            }
-        }
-
-        long videoFirstPts = 0;
-        long videoLastPts = 0;
-        int vs = 0;
-        long audioFirstPts = 0;
-        long audioLastPts = 0;
-        int as = 0;
-        boolean isVideo = true;
-        for (Sample sample : xs) {
-            if (isVideo && sample.getType() == Sample.Type.H264) {
-                vs ++;
-                videoLastPts = sample.pts();
-            } else if (isVideo && sample.getType() == Sample.Type.AAC_LC) {
-                System.out.println("video " + vs + ", " + (videoLastPts - videoFirstPts));
-                vs = 0;
-                isVideo = false;
-                audioFirstPts = sample.pts();
-                audioLastPts = sample.pts();
-            } else if (!isVideo && sample.getType() == Sample.Type.AAC_LC) {
-                as ++;
-                audioLastPts = sample.pts();
-            } else if (!isVideo && sample.getType() == Sample.Type.H264) {
-                System.out.println("audio " + as + ", " + (audioLastPts - audioFirstPts));
-                as = 0;
-                isVideo = true;
-                videoFirstPts = sample.pts();
-                videoLastPts = sample.pts();
-            }
-        }
-        if (isVideo) {
-            System.out.println("video " + vs + ", " + (videoLastPts - videoFirstPts));
-        } else {
-            System.out.println("audio " + as + ", " + (audioLastPts - audioFirstPts));
-        }
-
-        return videoSamples;
-    }
-
 
     public static void main(String[] args) throws IOException {
         //List<Sample> frames = parseMp4(Paths.get("v6-with-init.mp4"));
 
-        ByteBuffer patAndPmt = ByteBuffer.wrap(Files.readAllBytes(Paths.get("ffmpeg.ts")));
-        patAndPmt.limit(188*3);
+        ByteBuffer patAndPmt = ByteBuffer.wrap(Files.readAllBytes(Paths.get("media/v6.ts")));
+        patAndPmt.limit(188*2);
 
         TsMuxer muxer = new TsMuxer(ByteBuffer.allocate(0));
         try (FileChannel channel = FileChannel.open(Paths.get("java.ts"), StandardOpenOption.WRITE,
@@ -447,15 +386,12 @@ public class TsMuxer {
 
             List<Sample> aacSamples = AAC.read(Paths.get("media/a0.mp4"));
             List<Sample> avcSamples = TsMuxer.parseMp4(Paths.get("media/v6.mp4"));
-            List<Sample> samples = muxer.interleave(aacSamples, avcSamples);
-            System.out.println(aacSamples.size());
-            System.out.println(avcSamples.size());
-            System.out.println(samples.size());
+            List<Sample> samples = TsMuxer.interleave(aacSamples, avcSamples);
 
             while (patAndPmt.remaining() > 0)
                 channel.write(patAndPmt);
 
-            muxer.writeSamples(avcSamples, channel);
+            muxer.writeSamples(samples, channel);
         }
     }
 }
