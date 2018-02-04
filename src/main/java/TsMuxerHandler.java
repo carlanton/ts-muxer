@@ -23,8 +23,8 @@ public class TsMuxerHandler implements HttpHandler {
 
 
     public TsMuxerHandler() throws IOException {
-        basePath = Paths.get("media/");
-        Container init = TsMuxer.readMp4(basePath.resolve("v6.mp4"));
+        basePath = Paths.get("media/bbb/");
+        Container init = MP4Utils.readMp4(basePath.resolve("v-init.mp4"));
         nalUnitToByteStreamConverter = TsMuxer.createConverter(init);
 
         ByteBuffer patAndPmt = ByteBuffer.wrap(Files.readAllBytes(Paths.get("media/v6.ts")));
@@ -48,15 +48,15 @@ public class TsMuxerHandler implements HttpHandler {
     }
 
     private void sendManifest(HttpServerExchange exchange) {
-        List<MediaSegment> segments = IntStream.range(1, 5)
+        List<MediaSegment> segments = IntStream.range(1, 16)
                 .mapToObj(j -> MediaSegment.builder()
-                        .duration(3.2)
-                        .uri("v6-" + j + ".ts")
+                        .duration(12)
+                        .uri("v-" + j + ".ts")
                         .build())
                 .collect(Collectors.toList());
 
         MediaPlaylist mediaPlaylist = MediaPlaylist.builder()
-                .targetDuration(4)
+                .targetDuration(12)
                 .version(5)
                 .mediaSequence(1)
                 .ongoing(false)
@@ -69,8 +69,11 @@ public class TsMuxerHandler implements HttpHandler {
     }
 
     private void mux(HttpServerExchange exchange) throws IOException {
-        Path sourceSegment = basePath.resolve("v6.mp4");
-        ByteBuffer[] tsSegment = muxer.read(sourceSegment, nalUnitToByteStreamConverter);
+        String segment = exchange.getRequestPath().substring(1).replace(".ts", ".mp4");
+        Path sourceSegment = basePath.resolve(segment);
+        Path audioSegment = basePath.resolve(segment.replace("v", "a"));
+
+        ByteBuffer[] tsSegment = muxer.read(sourceSegment, audioSegment, nalUnitToByteStreamConverter);
         exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "video/MP2T");
         exchange.getResponseSender().send(tsSegment);
     }

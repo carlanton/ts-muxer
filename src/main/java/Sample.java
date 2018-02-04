@@ -1,20 +1,18 @@
 import java.nio.ByteBuffer;
 
 public class Sample {
-    ByteBuffer data;
+    private final ByteBuffer data;
     private final long pts;
     private final long dts;
-    private final int streamIndex;
-    private final int mpegTsStreamId;
+    private final int pid;
     private final boolean isKeyFrame;
     private final Type type;
 
-    public Sample(ByteBuffer data, long pts, long dts, int streamIndex, int mpegTsStreamId, boolean isKeyFrame, Type type) {
+    public Sample(ByteBuffer data, long pts, long dts, int pid, boolean isKeyFrame, Type type) {
         this.data = data;
         this.pts = pts;
         this.dts = dts;
-        this.streamIndex = streamIndex;
-        this.mpegTsStreamId = mpegTsStreamId;
+        this.pid = pid;
         this.isKeyFrame = isKeyFrame;
         this.type = type;
     }
@@ -31,12 +29,8 @@ public class Sample {
         return pts;
     }
 
-    public int streamIndex() {
-        return streamIndex;
-    }
-
-    public int mpegTsStreamId() {
-        return mpegTsStreamId;
+    public int pid() {
+        return pid;
     }
 
     public boolean isKeyFrame() {
@@ -45,17 +39,6 @@ public class Sample {
 
     public Type getType() {
         return type;
-    }
-
-    @Override
-    public String toString() {
-        return "AVPacket{" +
-                "data=" + data +
-                ", pts=" + pts +
-                ", dts=" + dts +
-                ", streamIndex=" + streamIndex +
-                ", mpegTsStreamId=" + mpegTsStreamId +
-                '}';
     }
 
     public enum Type {
